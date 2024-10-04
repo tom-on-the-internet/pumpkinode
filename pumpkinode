@@ -1,0 +1,412 @@
+#!/usr/bin/env node
+
+import { emitKeypressEvents } from "readline"
+import { exec } from "child_process"
+
+const ICONS = {
+    PLAYER: "",
+    BAD_PUMPKIN: "󰮣",
+    GOOD_PUMPKIN: "󰮿",
+}
+
+const CELEBRATIONS = [
+    "Got it.",
+    "Great!",
+    "Nice pumpkin.",
+    "Nice.",
+    "Oh yeah!",
+    "Yahoo!",
+    "Yay!",
+    "Yummy pumpkin.",
+]
+
+// lower is faster
+const PUMPKIN_SPEED = 400
+
+/**
+ * global, mutable game state
+ */
+let gameState = {}
+
+//----------------------------
+setUpTerminal() //         G |
+setUpKeyListener() //      A |
+initializeGameState() //   M |
+render() //                E |
+//----------------------------
+
+/**
+ * We need to prepare the terminal for the game.
+ * This means preparing input, using an alternate screen,
+ * hiding the cursor, etc.
+ */
+function setUpTerminal() {
+    // set up terminal for reading key presses
+    emitKeypressEvents(process.stdin)
+    process.stdin.setRawMode(true)
+
+    // use terminal alternate screen
+    process.stdout.write("\x1b[?1049h")
+
+    // hide cursor
+    process.stdout.write("\x1B[?25l")
+
+    process.stdout.on("resize", function () {
+        initializeGameState()
+        render()
+    })
+}
+
+/**
+ * This is basically a router, but for key presses.
+ */
+function setUpKeyListener() {
+    process.stdin.on("keypress", function (_, key) {
+        if (key.name === "q" || (key.name === "c" && key.ctrl)) {
+            gameOver("quit")
+            return
+        }
+
+        if (key.name === "s" && !gameState.started) {
+            gameState.started = true
+            prepareLevel()
+            return
+        }
+
+        // no other options if the game has not started
+        if (!gameState.started) {
+            return
+        }
+
+        switch (key.name) {
+            case "up":
+                gameState.playerY = Math.max(gameState.playerY - 1, 1)
+                break
+            case "down":
+                gameState.playerY = Math.min(
+                    gameState.playerY + 1,
+                    gameState.maxY
+                )
+                break
+            case "left":
+                gameState.playerX = Math.max(gameState.playerX - 1, 0)
+                break
+            case "right":
+                gameState.playerX = Math.min(
+                    gameState.playerX + 1,
+                    gameState.maxX
+                )
+                break
+        }
+        onPlayerMove()
+        render()
+    })
+}
+
+function initializeGameState() {
+    clearInterval(gameState?.gameInterval)
+
+    gameState = {
+        playerX: 1,
+        playerY: 2,
+        maxX: process.stdout.columns - 1,
+        maxY: process.stdout.rows - 1,
+        saying: "",
+        hasSayCmd: false,
+        level: 1,
+        pumpkins: [],
+        started: false,
+        gameInterval: setInterval(() => {
+            if (gameState.started) {
+                movePumpkins()
+                render()
+            }
+        }, PUMPKIN_SPEED),
+    }
+
+    // check if the say command exists. If so,
+    // we'll use it.
+    exec("which say", (error) => {
+        if (!error) {
+            gameState.hasSayCmd = true
+        }
+    })
+}
+
+/**
+ * Every time we render, we first clear the screen and then
+ * redraw everything. This isn't super efficient, but for our
+ * purposes it's fine.
+ */
+function render() {
+    console.clear()
+
+    // if the game hasn't started, we show a start screen
+    if (!gameState.started) {
+        console.log(`
+
+         _/_
+        /^,^\\
+        \\\\_//
+
+Welcome to Pumpkinode!
+
+  PRESS S TO START
+`)
+        return
+    }
+
+    // make a pink game state message at the top of the screen
+    process.stdout.cursorTo(0, 0)
+    process.stdout.write("\x1b[95m")
+    process.stdout.write(gameStateMessage())
+    process.stdout.write("\x1b[0m")
+
+    // draw the player
+    process.stdout.cursorTo(gameState.playerX, gameState.playerY)
+    process.stdout.write(ICONS.PLAYER)
+
+    // draw all the pumpkins in orange
+    process.stdout.write("\x1b[93m")
+    gameState.pumpkins.forEach(function (pumpkin) {
+        process.stdout.cursorTo(pumpkin.x, pumpkin.y)
+        process.stdout.write(
+            pumpkin.isGood ? ICONS.GOOD_PUMPKIN : ICONS.BAD_PUMPKIN
+        )
+    })
+
+    // reset to default color
+    process.stdout.write("\x1b[0m")
+}
+
+function movePumpkins() {
+    // It's a 50/50 if any given pumpkin will move
+    // We don't want them all moving at once because it
+    // looks weird.
+    let movingPumpkins = gameState.pumpkins.filter(coinToss)
+
+    movingPumpkins.forEach((pumpkin) => {
+        let x = pumpkin.x
+        let y = pumpkin.y
+
+        // Bad pumpkins generally move toward the player, but not always.
+        // This poses a threat to the player, but keeps it random enough
+        // to not get boring.
+        let moveTowardPlayer = !pumpkin.isGood && Math.random() > 0.2
+
+        if (moveTowardPlayer) {
+            if (x > gameState.playerX) {
+                x--
+            }
+            if (x < gameState.playerX) {
+                x++
+            }
+            if (y > gameState.playerY) {
+                y--
+            }
+            if (y < gameState.playerY) {
+                y++
+            }
+        } else {
+            // If we aren't moving toward the player,
+            // then we will move randomly.
+            if (coinToss()) {
+                x++
+            } else {
+                x--
+            }
+            if (coinToss()) {
+                y++
+            } else {
+                y--
+            }
+        }
+
+        // We only move the pumpkin if the space is empty.
+        // Pumpkins will never move on to the player, but they
+        // will get close enough to be annoying.
+        if (positionIsAvailable(x, y)) {
+            pumpkin.x = x
+            pumpkin.y = y
+        }
+    })
+}
+
+/**
+ * When the player moves, we need to update the state accordingly.
+ * Was a pumpkin stepped on?
+ * Is the level done?
+ */
+function onPlayerMove() {
+    for (let pumpkin of gameState.pumpkins) {
+        if (
+            !pumpkin.isGood &&
+            pumpkin.x === gameState.playerX &&
+            pumpkin.y === gameState.playerY
+        ) {
+            gameOver("lose")
+        }
+    }
+
+    let currentTotal = gameState.pumpkins.length
+
+    // remove pumpkins stepped on
+    gameState.pumpkins = gameState.pumpkins.filter((pumpkin) => {
+        if (!pumpkin.isGood) {
+            return true
+        }
+        if (pumpkin.x !== gameState.playerX) {
+            return true
+        }
+        if (pumpkin.y !== gameState.playerY) {
+            return true
+        }
+        return false
+    })
+
+    let goodCount = gameState.pumpkins.filter(
+        (pumpkin) => pumpkin.isGood
+    ).length
+
+    if (goodCount === 0) {
+        gameState.level++
+        if (gameState.level > 5) {
+            gameOver("win")
+            return
+        }
+        prepareLevel()
+        say("next level", true)
+        return
+    }
+
+    if (currentTotal > gameState.pumpkins.length) {
+        celebrate()
+    }
+}
+
+/**
+ * 50/50
+ */
+function coinToss() {
+    return Math.random() < 0.5
+}
+
+/**
+ * Before starting a new level, we need to put the player and
+ * pumpkins in their place.
+ */
+function prepareLevel() {
+    // player is always top left
+    gameState.playerX = 1
+    gameState.playerY = 2
+
+    // always 10 good pumpkins
+    let goodCount = 10
+
+    // more and more bad pumpkins
+    let badCount = gameState.level * 3
+
+    gameState.pumpkins = []
+
+    // place good pumpkins
+    while (goodCount > 0) {
+        let x = Math.floor(Math.random() * (gameState.maxX - 5)) + 5
+        let y = Math.floor(Math.random() * (gameState.maxY - 5)) + 5
+
+        if (positionIsAvailable(x, y)) {
+            gameState.pumpkins.push({ x, y, isGood: true })
+            goodCount--
+        }
+    }
+
+    // place bad pumpkins
+    while (badCount > 0) {
+        let x = Math.floor(Math.random() * (gameState.maxX - 5)) + 5
+        let y = Math.floor(Math.random() * (gameState.maxY - 5)) + 5
+
+        if (positionIsAvailable(x, y)) {
+            gameState.pumpkins.push({ x, y, isGood: false })
+            badCount--
+        }
+    }
+}
+
+/**
+ * End the game and restore the terminal.
+ */
+function gameOver(kind) {
+    // switch back to regular terminal screen
+    process.stdout.write("\x1b[?1049l")
+    // Restore the cursor
+    process.stdout.write("\x1B[?25h")
+
+    if (kind === "quit") {
+        console.log(`\nBye! ${ICONS.BAD_PUMPKIN}`)
+    }
+    if (kind === "lose") {
+        say("Oh, those pumpkins got me.", true)
+        console.log(`\nBetter luck next time! ${ICONS.BAD_PUMPKIN}`)
+    }
+    if (kind === "win") {
+        say("Happy Halloween to you!", true)
+        console.log(`\nHappy Halloween to you! ${ICONS.BAD_PUMPKIN}`)
+    }
+    process.exit()
+}
+
+/**
+ * Check if the position exists and is empty.
+ */
+function positionIsAvailable(x, y) {
+    if (x < 0 || y < 1) {
+        return false
+    }
+    if (x > gameState.maxX || y > gameState.maxY) {
+        return false
+    }
+
+    if (gameState.playerX === x && gameState.playerY === y) {
+        return false
+    }
+
+    for (let pumpkin of gameState.pumpkins) {
+        if (pumpkin.x === x && pumpkin.y === y) {
+            return false
+        }
+    }
+    return true
+}
+
+function celebrate() {
+    let celebration =
+        CELEBRATIONS[Math.floor(Math.random() * CELEBRATIONS.length)]
+
+    say(celebration)
+}
+
+/**
+ * say something. uses audio if available.
+ */
+function say(saying, force) {
+    if (gameState.saying && !force) {
+        return
+    }
+    gameState.saying = saying
+
+    if (!gameState.hasSayCmd) {
+        return
+    }
+    exec(`say --voice="Fred" ${saying}`, function () {
+        gameState.saying = ""
+    })
+}
+
+/**
+ * Generates the message for the top of the screen
+ */
+function gameStateMessage() {
+    let pumpkinsLeft = gameState.pumpkins.filter(
+        (pumpkin) => pumpkin.isGood
+    ).length
+    return `LEVEL: ${gameState.level} | PUMPKINS LEFT: ${pumpkinsLeft}  ${gameState.saying ? " " + gameState.saying : ""}`
+}
