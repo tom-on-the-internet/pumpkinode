@@ -1,0 +1,89 @@
+#!/usr/bin/env node
+
+/**
+ * This is a VERY bad file viewer toy app.
+ */
+
+import process from "node:process"
+import { emitKeypressEvents } from "readline"
+import { readdirSync, readFileSync, lstatSync } from "fs"
+
+let state = {
+    idx: 0,
+    files: readdirSync("./").map((filename) => ({
+        filename,
+        isDirectory: lstatSync(filename).isDirectory(),
+    })),
+}
+
+setUpTerminal()
+render()
+
+process.stdin.on("keypress", function (_, key) {
+    if (key.name === "q" || (key.name === "c" && key.ctrl)) {
+        exit()
+    }
+
+    if (key.name === "up") {
+        state.idx--
+        if (state.idx < 0) {
+            state.idx = state.files.length - 1
+        }
+    }
+    if (key.name === "down") {
+        state.idx++
+        if (state.idx >= state.files.length) {
+            state.idx = 0
+        }
+    }
+    render()
+})
+
+function setUpTerminal() {
+    // set up terminal for reading key presses
+    emitKeypressEvents(process.stdin)
+    process.stdin.setRawMode(true)
+
+    // hide cursor
+    process.stdout.write("\x1B[?25l")
+
+    // use terminal alternate screen
+    process.stdout.write("\x1b[?1049h")
+}
+
+function exit() {
+    // switch back to regular terminal screen
+    process.stdout.write("\x1b[?1049l")
+    // Restore the cursor
+    process.stdout.write("\x1B[?25h")
+
+    process.exit()
+}
+
+function render() {
+    console.clear()
+    console.log("WELCOME TO A TERRIBLE FILE VIEWER")
+    console.log("q to quit\n")
+    state.files.forEach((file, idx) => {
+        if (idx === state.idx) {
+            process.stdout.write(file.filename)
+            process.stdout.write("\x1b[93m")
+            process.stdout.write(" 󰜱\n")
+            process.stdout.write("\x1b[0m")
+        } else {
+            console.log(file.filename)
+        }
+    })
+
+    let file = state.files[state.idx]
+    let data = file.isDirectory
+        ? "DIRECTORY"
+        : readFileSync(file.filename).toString().substring(0, 200)
+
+    process.stdout.write(`\nViewing: `)
+    process.stdout.write("\x1b[93m")
+    console.log(`${file.filename}\n`)
+    process.stdout.write("\x1b[0m")
+
+    console.log(data)
+}
