@@ -195,32 +195,15 @@ function movePumpkins() {
         let moveTowardPlayer = !pumpkin.isGood && Math.random() > 0.2
 
         if (moveTowardPlayer) {
-            if (x > gameState.playerX) {
-                x--
-            }
-            if (x < gameState.playerX) {
-                x++
-            }
-            if (y > gameState.playerY) {
-                y--
-            }
-            if (y < gameState.playerY) {
-                y++
-            }
-        } else {
-            // If we aren't moving toward the player,
-            // then we will move randomly.
-            if (coinToss()) {
-                x++
-            } else {
-                x--
-            }
-            if (coinToss()) {
-                y++
-            } else {
-                y--
-            }
+        x += (x > gameState.playerX) ? -1 : (x < gameState.playerX) ? 1 : 0;
+        y += (y > gameState.playerY) ? -1 : (y < gameState.playerY) ? 1 : 0;
         }
+
+        // If we aren't moving toward the player,
+        // then we will move randomly.
+        x += coinToss() ? 1 : -1;
+        y += coinToss() ? 1 : -1;
+        
 
         // We only move the pumpkin if the space is empty.
         // Pumpkins will never move on to the player, but they
@@ -252,13 +235,10 @@ function onPlayerMove() {
 
     // remove pumpkins stepped on
     gameState.pumpkins = gameState.pumpkins.filter((pumpkin) => {
-        if (!pumpkin.isGood) {
-            return true
-        }
-        if (pumpkin.x !== gameState.playerX) {
-            return true
-        }
-        if (pumpkin.y !== gameState.playerY) {
+        if (!pumpkin.isGood ||
+            pumpkin.x !== gameState.playerX ||
+            pumpkin.y !== gameState.playerY
+        ) {
             return true
         }
         return false
@@ -307,26 +287,21 @@ function prepareLevel() {
     let badCount = gameState.level * 3
 
     gameState.pumpkins = []
+    
+    // Place good pumpkins.
+    placePumpkins(goodCount, true);
+    // Place bad pumpkins.
+    placePumpkins(badCount, false);
+}
 
-    // place good pumpkins
-    while (goodCount > 0) {
-        let x = Math.floor(Math.random() * (gameState.maxX - 5)) + 5
-        let y = Math.floor(Math.random() * (gameState.maxY - 5)) + 5
-
-        if (positionIsAvailable(x, y)) {
-            gameState.pumpkins.push({ x, y, isGood: true })
-            goodCount--
-        }
-    }
-
-    // place bad pumpkins
-    while (badCount > 0) {
-        let x = Math.floor(Math.random() * (gameState.maxX - 5)) + 5
-        let y = Math.floor(Math.random() * (gameState.maxY - 5)) + 5
+function placePumpkins(count, isGood) {
+    while (count > 0) {
+        let x = Math.floor(Math.random() * (gameState.maxX - 5)) + 5;
+        let y = Math.floor(Math.random() * (gameState.maxY - 5)) + 5;
 
         if (positionIsAvailable(x, y)) {
-            gameState.pumpkins.push({ x, y, isGood: false })
-            badCount--
+            gameState.pumpkins.push({ x, y, isGood });
+            count--;
         }
     }
 }
@@ -358,14 +333,11 @@ function gameOver(kind) {
  * Check if the position exists and is empty.
  */
 function positionIsAvailable(x, y) {
-    if (x < 0 || y < 1) {
-        return false
-    }
-    if (x > gameState.maxX || y > gameState.maxY) {
-        return false
-    }
-
-    if (gameState.playerX === x && gameState.playerY === y) {
+    if (
+        (x < 0 || y < 1) ||
+        (x > gameState.maxX || y > gameState.maxY) ||
+        (gameState.playerX === x && gameState.playerY === y)
+    ) {
         return false
     }
 
