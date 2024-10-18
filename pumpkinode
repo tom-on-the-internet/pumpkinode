@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
-import { emitKeypressEvents } from "readline"
-import { exec } from "child_process"
+import { emitKeypressEvents } from "node:readline"
+import { exec } from "node:child_process"
 
 const ICONS = {
     PLAYER: "",
